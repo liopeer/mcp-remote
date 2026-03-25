@@ -21,7 +21,8 @@
   "main": "dist/index.js",
   "bin": {
     "mcp-remote": "dist/proxy.js",
-    "mcp-remote-client": "dist/client.js"
+    "mcp-remote-client": "dist/client.js",
+    "mcp-remote-server": "dist/server.js"
   },
   "scripts": {
     "build": "tsup",
@@ -51,7 +52,8 @@
   "tsup": {
     "entry": [
       "src/client.ts",
-      "src/proxy.ts"
+      "src/proxy.ts",
+      "src/server.ts"
     ],
     "format": [
       "esm"
