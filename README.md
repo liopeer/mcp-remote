@@ -16,6 +16,110 @@ That's where `mcp-remote` comes in. As soon as your chosen MCP client supports r
 
 ## Usage
 
+### HTTP Server Mode (`mcp-remote-server`)
+
+If your MCP client supports HTTP-based MCP servers natively (e.g. Cursor ≥ 0.48 with the `url` config key), you can run `mcp-remote-server` as a standalone HTTP server instead of using the stdio proxy. It exposes a local [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) endpoint and handles OAuth on the way through.
+
+```bash
+npx mcp-remote-server https://remote.mcp.server/mcp
+```
+
+Then point your client at `http://127.0.0.1:3333/mcp`:
+
+```json
+{
+  "mcpServers": {
+    "remote-example": {
+      "url": "http://127.0.0.1:3333/mcp"
+    }
+  }
+}
+```
+
+All the same flags as `mcp-remote` are supported (`--transport`, `--header`, `--static-oauth-client-info`, `--debug`, etc.). Use `--listen-port` to change the port the HTTP server binds to (default `3333`), and the second positional argument to set the OAuth callback port:
+
+```bash
+npx mcp-remote-server https://remote.mcp.server/mcp --listen-port 8080
+```
+
+Each incoming MCP client session gets its own upstream connection. OAuth tokens are cached to disk and shared across sessions, so you only authenticate once.
+
+#### Running with Docker
+
+Docker containers cannot complete the OAuth browser redirect flow on their own: the authorization server sends your browser to a `localhost` callback URL, but inside a container `localhost` refers to the container's network — not your machine — so the callback never reaches the process.
+
+The recommended approach is to **pre-authenticate on your host machine** and then mount the resulting token files into the container.
+
+**Step 1 — Authenticate on your host**
+
+Run `mcp-remote` locally (outside Docker) pointing at the same server URL you plan to use in Docker:
+
+```bash
+npx mcp-remote https://remote.mcp.server/mcp
+```
+
+Follow the browser prompt and complete the OAuth flow. Once the connection is established, tokens are saved to `~/.mcp-auth/`. You can then stop the process with Ctrl+C.
+
+Alternatively, you can use [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to authenticate through a visual UI:
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+In the Inspector UI, set the transport to **stdio**, the command to `npx`, and the arguments to `mcp-remote https://remote.mcp.server/mcp`. Connect — this will open a browser window for the OAuth flow and save the tokens to `~/.mcp-auth/` the same way. You can then disconnect and proceed to the next step.
+
+**Step 2 — Build the image**
+
+```bash
+docker build -t mcp-remote-server .
+```
+
+**Step 3 — Run with the token directory mounted**
+
+```bash
+docker run -d \
+  -p 3333:3333 \
+  -v "$HOME/.mcp-auth":/root/.mcp-auth \
+  mcp-remote-server \
+  https://remote.mcp.server/mcp
+```
+
+The container starts already authenticated and will silently refresh its access token using the saved refresh token — no browser required. Adjust `/root/.mcp-auth` if the user inside your container has a different home directory (e.g. `/home/node/.mcp-auth`).
+
+You can also use the `MCP_REMOTE_CONFIG_DIR` environment variable to store the token files at a custom path:
+
+```bash
+docker run -d \
+  -p 3333:3333 \
+  -v "$HOME/.mcp-auth":/mcp-auth \
+  -e MCP_REMOTE_CONFIG_DIR=/mcp-auth \
+  mcp-remote-server \
+  https://remote.mcp.server/mcp
+```
+
+**Token expiry**
+
+The mounted `tokens.json` file contains both an access token and a refresh token. The container will automatically use the refresh token to renew access silently. You only need to repeat the pre-authentication step if the refresh token itself expires or is revoked (this depends on the server — some refresh tokens are long-lived, others expire after a period of inactivity).
+
+**Alternative: expose the callback port**
+
+If you prefer to authenticate interactively inside Docker (e.g. in CI with a display, or for a one-off setup), you can instead expose the OAuth callback port so the browser redirect reaches the container:
+
+```bash
+docker run \
+  -p 3333:3333 \
+  -p 7260:7260 \
+  -v mcp-auth:/root/.mcp-auth \
+  mcp-remote-server \
+  https://remote.mcp.server/mcp
+```
+
+The second `-p` maps the OAuth callback port (default `7260` — or whatever port you pass as the second argument to `mcp-remote-server`) from the container to your host, so the redirect from your browser lands correctly. Once authenticated the tokens are cached in the volume and you can restart the container in detached mode without the callback port exposed.
+
+---
+
+### Stdio Proxy Mode (`mcp-remote`)
+
 All the most popular MCP clients (Claude Desktop, Cursor & Windsurf) use the following config format:
 
 ```json

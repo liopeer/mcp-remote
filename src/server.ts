@@ -19,7 +19,6 @@ import {
   debugLog,
   mcpProxy,
   parseCommandLineArgs,
-  setupSignalHandlers,
   TransportStrategy,
   discoverOAuthServerInfo,
 } from './lib/utils'
@@ -40,6 +39,7 @@ type Session = {
 async function runServer(
   serverUrl: string,
   listenPort: number,
+  listenHost: string,
   callbackPort: number,
   headers: Record<string, string>,
   transportStrategy: TransportStrategy = 'http-first',
@@ -177,13 +177,11 @@ async function runServer(
     await localTransport.handleRequest(req, res, req.body)
   })
 
-  // Start the HTTP server bound to localhost only
-  const httpServer = app.listen(listenPort, '127.0.0.1', () => {
-    log(`HTTP MCP server listening at http://127.0.0.1:${listenPort}/mcp`)
+  const httpServer = app.listen(listenPort, listenHost, () => {
+    log(`HTTP MCP server listening at http://${listenHost}:${listenPort}/mcp`)
     log('Press Ctrl+C to exit')
   })
 
-  // Setup cleanup handler
   const cleanup = async () => {
     for (const { localTransport, remoteTransport } of sessions.values()) {
       await localTransport.close().catch(() => {})
@@ -196,11 +194,24 @@ async function runServer(
     httpServer.close()
   }
 
-  setupSignalHandlers(cleanup)
+  // Handle shutdown signals. Intentionally does not hook into stdin — the HTTP
+  // server's event loop keeps the process alive, and stdin may not be attached
+  // (e.g. when running in a Docker container).
+  process.on('SIGINT', async () => {
+    log('\nShutting down...')
+    await cleanup()
+    process.exit(0)
+  })
+  process.on('SIGTERM', async () => {
+    log('\nShutting down...')
+    await cleanup()
+    process.exit(0)
+  })
 }
 
-// Parse --listen-port before handing off to parseCommandLineArgs
+// Parse --listen-port and --listen-host before handing off to parseCommandLineArgs
 const rawArgs = process.argv.slice(2)
+
 let listenPort = DEFAULT_LISTEN_PORT
 const listenPortIndex = rawArgs.indexOf('--listen-port')
 if (listenPortIndex !== -1 && listenPortIndex < rawArgs.length - 1) {
@@ -209,6 +220,13 @@ if (listenPortIndex !== -1 && listenPortIndex < rawArgs.length - 1) {
     listenPort = parsed
   }
   rawArgs.splice(listenPortIndex, 2)
+}
+
+let listenHost = '127.0.0.1'
+const listenHostIndex = rawArgs.indexOf('--listen-host')
+if (listenHostIndex !== -1 && listenHostIndex < rawArgs.length - 1) {
+  listenHost = rawArgs[listenHostIndex + 1]
+  rawArgs.splice(listenHostIndex, 2)
 }
 
 parseCommandLineArgs(rawArgs, 'Usage: npx tsx server.ts <https://server-url> [callback-port] [--listen-port 3333] [--debug]')
@@ -229,6 +247,7 @@ parseCommandLineArgs(rawArgs, 'Usage: npx tsx server.ts <https://server-url> [ca
       return runServer(
         serverUrl,
         listenPort,
+        listenHost,
         callbackPort,
         headers,
         transportStrategy,
